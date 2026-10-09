@@ -78,11 +78,14 @@ One table, discriminated by a Postgres enum.
 
 ```sql
 CREATE TYPE entity_type AS ENUM (
-  'country','currency','language','unit_of_measure','region',
-  'industry','payment_term','incoterm','tax_code','cost_center'
+  'country','currency','language','category','gender',
+  'age','geography','product_line','business_unit','product_tier'
 );
--- Placeholder names. Replace with the real ten before the first migration;
--- each value maps to one Rust marker type and one route prefix.
+-- Each value maps to one Rust marker type and one route prefix:
+--   country→/countries  currency→/currencies  language→/languages
+--   category→/categories  gender→/genders  age→/ages  geography→/geographies
+--   product_line→/product-lines  business_unit→/business-units
+--   product_tier→/product-tiers
 
 CREATE FUNCTION jsonb_key_count(j jsonb) RETURNS integer
   LANGUAGE sql IMMUTABLE AS
@@ -372,7 +375,6 @@ no token → 401, token without scope → 403.
 **Build**: `.sqlx/` committed; CI builds with `SQLX_OFFLINE=true` and a
 separate job runs `cargo sqlx prepare --check` against a container.
 
-## 9. Open items to settle before implementation
+## 9. Open items
 
-- Replace the ten placeholder `entity_type` values with the real entity names
-  and their route paths.
+None. Entity names and route paths are fixed in section 4.

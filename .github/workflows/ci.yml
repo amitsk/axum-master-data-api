@@ -1,0 +1,128 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Every job compiles against the committed .sqlx/ cache, so `cargo check`,
+  # `cargo clippy` and `cargo test` need no database at all. The
+  # `sqlx-prepare-check` job below overrides this with "false" so that the
+  # macros talk to a real Postgres instead of replaying the cache.
+  SQLX_OFFLINE: "true"
+
+jobs:
+  check:
+    name: fmt and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `rust-toolchain.toml` already pins 1.89.0; naming it explicitly keeps
+      # the job honest if that file is ever removed.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      # The Postgres major version must match across the three places it appears:
+      # the testcontainers tag, the compose service, and the sqlx-prepare-check
+      # service. A mismatch means migrations run against one major version while we
+      # deploy on another, which only fails in production. Cheap to check, so it is
+      # checked.
+      - name: Postgres versions agree
+        run: |
+          set -uo pipefail
+          compose_ver=$(grep -oP 'image:\s*postgres:\K[0-9]+' docker-compose.yml || true)
+          ci_ver=$(grep -oP 'image:\s*postgres:\K[0-9]+' .github/workflows/ci.yml || true)
+          test_ver=$(grep -oP 'PG_IMAGE_TAG:\s*&str\s*=\s*"\K[0-9]+' tests/common/mod.rs || true)
+          echo "compose=$compose_ver ci=$ci_ver tests=$test_ver"
+          if [ -z "$compose_ver" ] || [ -z "$ci_ver" ] || [ -z "$test_ver" ]; then
+            echo "::error::could not parse a Postgres version from one of the three files; if a constant was renamed, update this step too"
+            exit 1
+          fi
+          if [ "$compose_ver" != "$ci_ver" ] || [ "$compose_ver" != "$test_ver" ]; then
+            echo "::error::Postgres version drift: compose=$compose_ver ci=$ci_ver tests=$test_ver"
+            exit 1
+          fi
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    # No DATABASE_URL here on purpose. `tests/handlers.rs` and the unit tests
+    # use the in-memory repository, and `tests/repository.rs` / `tests/api.rs`
+    # start their own throwaway Postgres through testcontainers, so they never
+    # touch a service URL. `ubuntu-latest` ships Docker, which is what
+    # testcontainers needs.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run the test suite
+        run: cargo test --all-targets
+
+  sqlx-prepare-check:
+    name: sqlx offline cache is current
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: master_data
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/master_data
+      # sqlx treats anything other than "true"/"1" as online, so this overrides
+      # the workflow-level SQLX_OFFLINE and forces the macros to read the live
+      # schema. Without it `prepare --check` would only compare the cache
+      # against itself and always pass.
+      SQLX_OFFLINE: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Pinned deliberately. Newer sqlx-cli releases pull in transitive
+      # dependencies that need a newer rustc than the 1.89.0 this project
+      # pins in rust-toolchain.toml, and the failure surfaces as an opaque
+      # compile error rather than a version message. Bump both together.
+      # --no-default-features drops sqlite/mysql/native-tls; rustls needs no
+      # system OpenSSL. --locked installs sqlx-cli's own published lockfile.
+      - name: Install sqlx-cli
+        run: >-
+          cargo install sqlx-cli
+          --version 0.8.6
+          --no-default-features
+          --features postgres,rustls
+          --locked
+
+      # The committed .sqlx/ metadata is only valid against a migrated schema.
+      - name: Apply migrations
+        run: sqlx migrate run
+
+      # Exits 0 when .sqlx/ matches the queries, 1 when it needs regenerating.
+      - name: Check .sqlx/ is up to date
+        run: cargo sqlx prepare --check

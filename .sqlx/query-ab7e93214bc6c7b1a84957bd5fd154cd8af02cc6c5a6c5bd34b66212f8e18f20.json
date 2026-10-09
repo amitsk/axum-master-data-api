@@ -1,0 +1,118 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO master_data (entity_type, id, code, name, short_name, attributes, updated_by)\n               VALUES ($1, $2, $3, $4, $5, $6, $7)\n               RETURNING entity_type AS \"entity_type: EntityType\", id, code, name, short_name,\n                         attributes, version, created_at, updated_at, updated_by",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "entity_type: EntityType",
+        "type_info": {
+          "Custom": {
+            "name": "entity_type",
+            "kind": {
+              "Enum": [
+                "country",
+                "currency",
+                "language",
+                "category",
+                "gender",
+                "age",
+                "geography",
+                "product_line",
+                "business_unit",
+                "product_tier"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "code",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "short_name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "attributes",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "version",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "updated_by",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "entity_type",
+            "kind": {
+              "Enum": [
+                "country",
+                "currency",
+                "language",
+                "category",
+                "gender",
+                "age",
+                "geography",
+                "product_line",
+                "business_unit",
+                "product_tier"
+              ]
+            }
+          }
+        },
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "ab7e93214bc6c7b1a84957bd5fd154cd8af02cc6c5a6c5bd34b66212f8e18f20"
+}
