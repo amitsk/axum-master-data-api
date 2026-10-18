@@ -142,33 +142,65 @@ it. Two things must line up:
    migrations itself at startup (`MIGRATOR.run(&pool)` in `src/main.rs`), so step 3
    above is optional when you only want to run the server.
 
+#### Create the database and a role
+
+The migrations create the enum, function, and tables **inside an existing database**;
+they never create the database or the role. Run this once as a Postgres superuser
+(`postgres` below — swap in your host, port, and superuser):
+
 ```bash
-export DATABASE_URL='postgres://USER:PASSWORD@db-host.example.com:5432/master_data'   # sqlx CLI
-export APP_DATABASE__URL="$DATABASE_URL"                                            # the service
+psql -h localhost -p 5432 -U postgres -d postgres <<'SQL'
+-- A dedicated login role. Change the password.
+CREATE ROLE master_data LOGIN PASSWORD 'change-me';
+
+-- The application database, owned by that role so the startup migrations can create
+-- schema objects.
+CREATE DATABASE master_data OWNER master_data;
+SQL
+```
+
+Owning the database is what lets `MIGRATOR.run` create the enum, function, and tables on
+first boot. If you instead point at a database the role does **not** own, grant the
+privileges explicitly:
+
+```bash
+psql -h localhost -p 5432 -U postgres -d master_data <<'SQL'
+GRANT CONNECT ON DATABASE master_data TO master_data;
+GRANT CREATE, USAGE ON SCHEMA public TO master_data;
+SQL
+```
+
+`CREATE` on the schema matters on Postgres 15+, where `public` is no longer
+world-writable. Without `psql`, the same two steps are
+`createdb -h localhost -U postgres -O master_data master_data` (role first) or
+`make db-create` (which uses `DATABASE_URL`).
+
+#### Point the service at it and run
+
+```bash
+export DATABASE_URL='postgres://master_data:change-me@localhost:5432/master_data'  # sqlx CLI
+export APP_DATABASE__URL="$DATABASE_URL"                                           # the service
 export APP_AUTH__JWT_SECRET=dev-secret
 
 # Optional, only if you want migrations applied outside the server process:
 sqlx migrate run
 
-cargo run
+# SQLX_OFFLINE uses the committed .sqlx cache, so the first build works before the
+# schema exists; the service migrates at startup.
+SQLX_OFFLINE=true cargo run
 ```
 
-Or let the Makefile set both variables from a single URL:
+Or let the Makefile set both variables (and `SQLX_OFFLINE=true`) from a single URL:
 
 ```bash
-make run-local DATABASE_URL='postgres://USER:PASSWORD@localhost:5432/master_data'
+make run-local DATABASE_URL='postgres://master_data:change-me@localhost:5432/master_data'
 ```
 
-`make run-local` builds with the committed `.sqlx` cache (`SQLX_OFFLINE=true`), so the
-first run works before the schema exists; the service applies migrations at startup.
 `make help` lists the other targets (`db-create`, `migrate`).
 
 The URL is the standard `postgres://user:password@host:port/database` form. A few
 practical notes:
 
-- **Create the database first.** The migration creates tables inside an existing
-  database; it will not create the database itself.
-  `createdb -h db-host.example.com -U USER master_data`
 - **`sslmode` is supported** by the normal libpq query string, e.g.
   `postgres://USER:PASSWORD@db-host:5432/master_data?sslmode=require`.
   `sqlx` is built with `tls-rustls`, so TLS needs no system OpenSSL.
