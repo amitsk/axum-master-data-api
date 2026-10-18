@@ -1,2 +1,5 @@
 /target
 .superpowers/
+
+# Local environment: copy .env.example to .env. Never commit real credentials.
+.env

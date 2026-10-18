@@ -54,10 +54,10 @@ segment changes.
 
 | Method   | Path                              | Auth      | Success                     | Failures |
 | -------- | --------------------------------- | --------- | --------------------------- | -------- |
-| `POST`   | `/{entity}`                       | write     | `201`, record body, `Location` | `409` duplicate code, `422` validation |
+| `POST`   | `/{entity}`                       | write     | `201`, record body, `Location` | `409` duplicate code, `413` body too large, `415` bad `Content-Type`, `422` validation |
 | `GET`    | `/{entity}/{id}`                  | none      | `200`, record               | `404` missing or soft-deleted |
 | `GET`    | `/{entity}?code=&name=&limit=&offset=` | none | `200`, page                 | `422` bad parameters |
-| `PUT`    | `/{entity}/{id}`                  | write     | `200`, updated record       | `428` missing `If-Match`, `409` version mismatch or duplicate code, `404`, `422` |
+| `PUT`    | `/{entity}/{id}`                  | write     | `200`, updated record       | `428` missing `If-Match`, `409` version mismatch or duplicate code, `404`, `413`, `415`, `422` |
 | `DELETE` | `/{entity}/{id}`                  | write     | `204`, idempotent           | — |
 
 The ten `{entity}` path segments:
@@ -112,7 +112,8 @@ docker compose up -d
 #    1.89.0 this project pins. --no-default-features drops sqlite/mysql/native-tls.
 cargo install sqlx-cli --version 0.8.6 --no-default-features --features postgres,rustls
 
-# 3. Schema. DATABASE_URL comes from the committed .env file.
+# 3. Schema. The sqlx CLI reads DATABASE_URL from your untracked .env; create it
+#    from the committed template first: cp .env.example .env
 sqlx migrate run
 
 # 4. Run. Both secrets must come from the environment; they are not in any TOML.
@@ -152,6 +153,16 @@ sqlx migrate run
 cargo run
 ```
 
+Or let the Makefile set both variables from a single URL:
+
+```bash
+make run-local DATABASE_URL='postgres://USER:PASSWORD@localhost:5432/master_data'
+```
+
+`make run-local` builds with the committed `.sqlx` cache (`SQLX_OFFLINE=true`), so the
+first run works before the schema exists; the service applies migrations at startup.
+`make help` lists the other targets (`db-create`, `migrate`).
+
 The URL is the standard `postgres://user:password@host:port/database` form. A few
 practical notes:
 
@@ -161,12 +172,12 @@ practical notes:
 - **`sslmode` is supported** by the normal libpq query string, e.g.
   `postgres://USER:PASSWORD@db-host:5432/master_data?sslmode=require`.
   `sqlx` is built with `tls-rustls`, so TLS needs no system OpenSSL.
-- **`.env` is only a sqlx convenience.** The committed `.env` holds a
-  `DATABASE_URL` pointing at the local compose container, which `sqlx` CLI reads
-  automatically. The service never reads `.env`, so it does not affect `cargo run`.
-  Export the vars in your shell (as above), or put them in
-  `config/development.toml` — but secrets belong in the environment, which is why
-  `database.url` and `auth.jwt_secret` are deliberately absent from every TOML file.
+- **`.env` is only a sqlx convenience and is git-ignored.** Copy the committed
+  `.env.example` to `.env`; its `DATABASE_URL` points at the local compose container,
+  which the `sqlx` CLI reads automatically. The service never reads `.env`, so it does
+  not affect `cargo run`. Export the service vars in your shell (as above), or put
+  them in `config/development.toml` — but secrets belong in the environment, which is
+  why `database.url` and `auth.jwt_secret` are deliberately absent from every TOML file.
 - **To run the test suite against your instance** you do not need to: the container
   tests are self-contained (see [Tests](#tests)).
 
@@ -415,8 +426,8 @@ has not drifted with a Postgres service, `sqlx migrate run`, and
 query macro fails to compile and you did not intend it to, you probably forgot to
 re-prepare.
 
-Note that `cargo sqlx prepare` reads `.env`, so `DATABASE_URL` there points at your
-`docker compose` database. Queries are written against `migrations/`, which is the
+Note that `cargo sqlx prepare` reads your untracked `.env`, so `DATABASE_URL` there
+points at your `docker compose` database. Queries are written against `migrations/`, which is the
 single source of truth for the schema.
 
 ## Concurrency and optimistic locking
@@ -462,11 +473,13 @@ All errors are RFC 9457 problem documents served as
 ```
 
 Status codes in use: `200`, `201`, `204`, `401`, `403`, `404`, `405`, `408`,
-`409`, `422`, `428`, `500`, `503`. Every one of them — including unknown paths
-(`404`), wrong methods (`405`), timeouts (`408`, after `request_timeout_secs`),
-and an unhealthy `/ready` (`503`) — answers `application/problem+json` with
-`instance` set to the request path. `500` returns a generic detail and logs the
-cause; nothing internal is
+`409`, `413`, `415`, `422`, `428`, `500`, `503`. Every one of them — including
+unknown paths (`404`), wrong methods (`405`, which also sets the RFC 9110
+`Allow` header), timeouts (`408`, after `request_timeout_secs`), an over-limit
+request body (`413`), a wrong or missing `Content-Type` on writes (`415`), and an
+unhealthy `/ready` (`503`) — answers `application/problem+json` with `instance`
+set to the request path. `500` returns a generic detail and logs the cause;
+nothing internal is
 leaked to the client.
 
 Cross-origin browser access is read-only: `GET`/`HEAD` are served with
