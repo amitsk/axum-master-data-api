@@ -66,8 +66,12 @@ impl JwtKeys {
     pub fn verify(&self, token: &str) -> Result<AuthContext, AppError> {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.set_required_spec_claims(&["exp", "sub"]);
-        let data = decode::<Claims>(token, &self.decoding, &validation)
-            .map_err(|e| AppError::Unauthorized(format!("invalid token: {e}")))?;
+        let data = decode::<Claims>(token, &self.decoding, &validation).map_err(|e| {
+            // Keep the reason server-side. The response detail stays generic so a
+            // caller cannot distinguish an expired token from a forged one.
+            tracing::debug!(error = ?e, "rejected bearer token");
+            AppError::Unauthorized("invalid token".to_string())
+        })?;
         let scopes = data
             .claims
             .scope
@@ -80,6 +84,16 @@ impl JwtKeys {
             scopes,
         })
     }
+}
+
+/// Extracts the token from `Authorization: <scheme> <token>`, matching the scheme
+/// case-insensitively as RFC 7235 requires (so `bearer`, `Bearer`, `BEARER` all work).
+fn bearer_token(header: &str) -> Option<&str> {
+    let (scheme, token) = header.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return None;
+    }
+    Some(token.trim())
 }
 
 /// Extractor: valid bearer JWT holding the write scope.
@@ -99,10 +113,9 @@ where
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| AppError::Unauthorized("missing Authorization header".into()))?;
-        let token = header
-            .strip_prefix("Bearer ")
-            .ok_or_else(|| AppError::Unauthorized("expected Bearer token".into()))?;
-        let ctx = keys.verify(token.trim())?;
+        let token =
+            bearer_token(header).ok_or_else(|| AppError::Unauthorized("expected Bearer token".into()))?;
+        let ctx = keys.verify(token)?;
         if !ctx.scopes.iter().any(|s| s == keys.write_scope()) {
             return Err(AppError::Forbidden(format!(
                 "scope '{}' required",
@@ -203,5 +216,25 @@ mod tests {
         let (status, body) = call(r, Some(&format!("Bearer {tok}"))).await;
         assert_eq!(status, 200);
         assert_eq!(body, "svc-catalog");
+    }
+
+    #[tokio::test]
+    async fn bearer_scheme_is_case_insensitive() {
+        let (r, keys) = app();
+        let tok = keys.issue("svc", &["masterdata:write"], Duration::from_secs(60));
+        for scheme in ["Bearer", "bearer", "BEARER", "bEaReR"] {
+            let (status, body) = call(r.clone(), Some(&format!("{scheme} {tok}"))).await;
+            assert_eq!(status, 200, "{scheme}");
+            assert_eq!(body, "svc", "{scheme}");
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_token_detail_does_not_leak_decode_reason() {
+        let (r, _) = app();
+        let (status, body) = call(r, Some("Bearer not.a.jwt")).await;
+        assert_eq!(status, 401);
+        // The detail is a fixed string: no `jsonwebtoken` error text is echoed back.
+        assert!(body.contains(r#""detail":"invalid token""#), "{body}");
     }
 }

@@ -30,6 +30,10 @@ pub enum AppError {
     Forbidden(String),
     #[error("method not allowed")]
     MethodNotAllowed,
+    #[error("unsupported media type")]
+    UnsupportedMediaType,
+    #[error("payload too large")]
+    PayloadTooLarge,
     #[error("request timed out")]
     RequestTimeout,
     #[error("service unavailable")]
@@ -64,6 +68,8 @@ impl AppError {
             AppError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             AppError::Forbidden(_) => StatusCode::FORBIDDEN,
             AppError::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
+            AppError::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            AppError::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             AppError::RequestTimeout => StatusCode::REQUEST_TIMEOUT,
             AppError::ServiceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -185,6 +191,8 @@ mod tests {
             (AppError::Unauthorized("no token".into()), 401, "Unauthorized"),
             (AppError::Forbidden("scope".into()), 403, "Forbidden"),
             (AppError::MethodNotAllowed, 405, "Method Not Allowed"),
+            (AppError::UnsupportedMediaType, 415, "Unsupported Media Type"),
+            (AppError::PayloadTooLarge, 413, "Payload Too Large"),
             (AppError::RequestTimeout, 408, "Request Timeout"),
             (AppError::ServiceUnavailable, 503, "Service Unavailable"),
             (

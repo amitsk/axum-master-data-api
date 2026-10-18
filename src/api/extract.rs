@@ -1,13 +1,15 @@
 use axum::{
     extract::{rejection::JsonRejection, FromRequest, FromRequestParts, Json, Path, Query, Request},
-    http::request::Parts,
+    http::{request::Parts, StatusCode},
 };
 use serde::de::DeserializeOwned;
 
 use crate::domain::FieldError;
 use crate::error::AppError;
 
-/// `Json<T>` whose rejection is a 422 problem+json with field `body`.
+/// `Json<T>` whose rejections become problem+json: `415` for a wrong or missing
+/// `Content-Type`, `413` for an over-limit body, and `422` (field `body`) for an
+/// unparseable or schema-invalid body.
 pub struct AppJson<T>(pub T);
 
 impl<S, T> FromRequest<S> for AppJson<T>
@@ -20,22 +22,20 @@ where
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
         match Json::<T>::from_request(req, state).await {
             Ok(Json(v)) => Ok(AppJson(v)),
-            Err(rej) => Err(AppError::Validation(vec![FieldError::new(
-                "body",
-                body_text(&rej),
-            )])),
+            Err(rej) => Err(json_error(rej)),
         }
     }
 }
 
-fn body_text(rej: &JsonRejection) -> String {
-    match rej {
-        JsonRejection::JsonDataError(e) => e.body_text(),
-        JsonRejection::JsonSyntaxError(e) => e.body_text(),
-        JsonRejection::MissingJsonContentType(_) => "expected Content-Type: application/json".to_string(),
-        // `JsonRejection` is `#[non_exhaustive]`, so the remaining variants
-        // (currently only `BytesRejection`) are covered here.
-        other => other.body_text(),
+fn json_error(rej: JsonRejection) -> AppError {
+    match &rej {
+        JsonRejection::MissingJsonContentType(_) => AppError::UnsupportedMediaType,
+        JsonRejection::BytesRejection(_) if rej.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            AppError::PayloadTooLarge
+        }
+        // Syntax and schema errors, and a non-limit body-read failure, stay a 422
+        // field error; `body_text()` carries the extractor's message.
+        _ => AppError::Validation(vec![FieldError::new("body", rej.body_text())]),
     }
 }
 

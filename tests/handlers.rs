@@ -433,9 +433,61 @@ async fn wrong_method_is_405_problem_json() {
     let (status, p, headers) = send(&app, req).await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(headers["content-type"], "application/problem+json");
+    // RFC 9110 requires a 405 to carry `Allow` listing the supported methods.
+    let allow = headers["allow"].to_str().expect("Allow header present");
+    for m in ["GET", "PUT", "DELETE"] {
+        assert!(allow.contains(m), "Allow must list {m}, got {allow:?}");
+    }
     let p: ProblemDetails = serde_json::from_value(p).unwrap();
     assert_eq!(p.detail, "method not allowed");
     assert_eq!(p.instance.as_deref(), Some("/api/v1/countries/1"));
+}
+
+#[tokio::test]
+async fn wrong_or_missing_content_type_is_415() {
+    let (app, keys) = app();
+    let t = token(&keys);
+    let body = json!({"code": "X", "name": "X", "shortName": "X"});
+
+    for ct in ["text/plain", "application/xml"] {
+        let req = Request::post("/api/v1/countries")
+            .header("authorization", &t)
+            .header("content-type", ct)
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let (status, p, headers) = send(&app, req).await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{ct}");
+        assert_eq!(headers["content-type"], "application/problem+json");
+        assert_eq!(p["status"], 415);
+        assert_eq!(p["instance"], "/api/v1/countries");
+    }
+
+    // No Content-Type header at all.
+    let req = Request::post("/api/v1/countries")
+        .header("authorization", &t)
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let (status, _, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
+#[tokio::test]
+async fn oversized_body_is_413() {
+    let (app, keys) = app();
+    let t = token(&keys);
+    // axum's default request body limit is 2 MiB; 3 MiB trips it.
+    let huge = format!(
+        r#"{{"code":"X","name":"{}","shortName":"X"}}"#,
+        "a".repeat(3 * 1024 * 1024)
+    );
+    let req = Request::post("/api/v1/countries")
+        .header("authorization", &t)
+        .header("content-type", "application/json")
+        .body(Body::from(huge))
+        .unwrap();
+    let (status, p, _) = send(&app, req).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(p["status"], 413);
 }
 
 #[tokio::test]

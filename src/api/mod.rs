@@ -11,8 +11,8 @@ use std::time::Duration;
 use axum::{
     extract::{FromRef, Request, State},
     http::{
-        header::{HeaderName, CONTENT_TYPE},
-        HeaderValue, Method,
+        header::{HeaderName, ALLOW, CONTENT_TYPE},
+        HeaderValue, Method, StatusCode,
     },
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -67,11 +67,10 @@ pub fn build_app(state: AppState, request_timeout: Duration) -> Router {
         .route("/ready", get(handlers::ready))
         .merge(routes::entity_routes())
         .merge(SwaggerUi::new("/docs").url("/openapi.json", openapi::document()))
-        // Unknown paths and wrong methods are part of the API contract too: without
-        // these, axum answers with an empty 404/405 body, breaking the
-        // "every error is problem+json" rule.
+        // Unknown paths are part of the API contract too: without this, axum
+        // answers with an empty 404 body, breaking the "every error is
+        // problem+json" rule.
         .fallback(handlers::fallback_404)
-        .method_not_allowed_fallback(handlers::fallback_405)
         // Innermost layer: the timeout fires before `add_problem_instance` sees the
         // response, so the 408 still gets `instance` filled in like any other error.
         // (Layers added earlier are inner; `add_problem_instance` below wraps this.)
@@ -79,6 +78,9 @@ pub fn build_app(state: AppState, request_timeout: Duration) -> Router {
             request_timeout,
             request_timeout_mw,
         ))
+        // axum still generates the 405 and its RFC-required `Allow` header; this
+        // rewrite only swaps the empty body for problem+json.
+        .layer(middleware::from_fn(promote_method_not_allowed))
         .layer(middleware::from_fn(add_problem_instance))
         .layer(
             ServiceBuilder::new()
@@ -108,6 +110,23 @@ async fn request_timeout_mw(State(timeout): State<Duration>, req: Request, next:
         Ok(resp) => resp,
         Err(_) => AppError::RequestTimeout.into_response(),
     }
+}
+
+/// Rewrites axum's built-in 405 to problem+json while keeping the `Allow` header
+/// that RFC 9110 requires on a 405. `method_not_allowed_fallback` cannot preserve
+/// `Allow`, because the fallback handler is not told which methods the matched
+/// path allows.
+async fn promote_method_not_allowed(req: Request, next: Next) -> Response {
+    let resp = next.run(req).await;
+    if resp.status() != StatusCode::METHOD_NOT_ALLOWED {
+        return resp;
+    }
+    let allow = resp.headers().get(ALLOW).cloned();
+    let mut out = AppError::MethodNotAllowed.into_response();
+    if let Some(allow) = allow {
+        out.headers_mut().insert(ALLOW, allow);
+    }
+    out
 }
 
 #[cfg(test)]

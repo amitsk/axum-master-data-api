@@ -111,6 +111,8 @@ pub fn document() -> OpenApi {
                 .response("405", problem("Method not allowed"))
                 .response("408", problem("Request exceeded the server timeout"))
                 .response("409", problem("Duplicate code"))
+                .response("413", problem("Payload too large"))
+                .response("415", problem("Unsupported media type"))
                 .response("422", problem("Validation failed")),
         );
 
@@ -142,6 +144,8 @@ pub fn document() -> OpenApi {
                 .response("405", problem("Method not allowed"))
                 .response("408", problem("Request exceeded the server timeout"))
                 .response("409", problem("Version mismatch or duplicate code"))
+                .response("413", problem("Payload too large"))
+                .response("415", problem("Unsupported media type"))
                 .response("422", problem("Validation failed"))
                 .response("428", problem("If-Match missing or malformed")),
         );

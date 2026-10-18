@@ -76,12 +76,6 @@ pub async fn fallback_404() -> AppError {
     AppError::NotFound
 }
 
-/// Catches wrong-method requests so they answer problem+json instead of axum's
-/// empty 405.
-pub async fn fallback_405() -> AppError {
-    AppError::MethodNotAllowed
-}
-
 pub async fn health() -> StatusCode {
     StatusCode::OK
 }
